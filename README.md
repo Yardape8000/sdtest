@@ -6,6 +6,7 @@ Run the createFiles.bat file in the sdtest/data folder.
  This will create the 1.2GB of test files. Run it from the SD card.
  Sorry I assume it's windows only.
  The batch file should create the files the quickest if ran on the SD card.
+ Use sdtest_full.zip is the batch file does not work.
 
  It tests random reads of 1k, 10k, 100k & 1M files.
 
