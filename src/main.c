@@ -1,6 +1,12 @@
 #include <string.h>
 #include <stdarg.h>
 #include <stdlib.h>
+#include <stdio.h>
+#include <unistd.h>
+#include <fcntl.h> 
+#include <string.h>
+#include <time.h>
+#include <sys/time.h>
 #include <malloc.h>
 #include "dynamic_libs/os_functions.h"
 #include "dynamic_libs/fs_functions.h"
@@ -17,7 +23,113 @@
 #include "utils/utils.h"
 #include "common/common.h"
 
-/* Entry point */
+#define TEST_FILE_PATH	"sd:/wiiu/apps/sdtest/data/" 
+#define PRINT_TEXT2(x, y, ...) { snprintf(msg, 80, __VA_ARGS__); OSScreenPutFontEx(0, x, y, msg); OSScreenPutFontEx(1, x, y, msg); }
+#define MAGIC_NUMBER 4294969930
+
+double calc_read_rate(double read_time, int factor)
+{
+	double read_rate = 0;
+	if (read_time > 0)
+		read_rate = factor / read_time;
+	return read_rate;
+}
+
+void update_screen(double data[], int handle_buffer)
+{
+    char msg[80];
+	if (handle_buffer)
+	{
+		OSScreenClearBufferEx(0, 0);
+		OSScreenClearBufferEx(1, 0);
+	}
+	PRINT_TEXT2(0, 4, "1k byte = %.2f s, %.2f MBps", data[0], calc_read_rate(data[0], 1));
+	PRINT_TEXT2(0, 5, "10k byte = %.2f s, %.2f MBps", data[1], calc_read_rate(data[1], 10));
+	PRINT_TEXT2(0, 6, "100k byte = %.2f s, %.2f MBps", data[2], calc_read_rate(data[2], 100));
+	PRINT_TEXT2(0, 7, "1M byte = %.2f s, %.2f MBps", data[3], calc_read_rate(data[3], 1000));
+	PRINT_TEXT2(0, 8, "1k byte in 1M = %.2f s, %.2f MBps", data[4], calc_read_rate(data[4], 1));
+	PRINT_TEXT2(0, 9, "10k byte in 10M = %.2f s, %.2f MBps", data[5], calc_read_rate(data[5], 10));
+	PRINT_TEXT2(0, 10, "100k byte in 100M = %.2f s, %.2f MBps", data[6], calc_read_rate(data[6], 100));
+	PRINT_TEXT2(0, 11, "1M byte in 1G = %.2f s, %.2f MBps", data[7], calc_read_rate(data[7], 1000));
+	PRINT_TEXT2(0, 12, "1k byte in 10M = %.2f s, %.2f MBps", data[8], calc_read_rate(data[8], 10));
+	if (handle_buffer)
+	{
+		OSScreenFlipBuffersEx(0);
+		OSScreenFlipBuffersEx(1);
+	}
+}
+
+int test1(unsigned char* fileBuffer, double read_time[], int addr, int file_size, int samples, int loops, char *file_name)
+{
+	int iFd;
+	int failed = 0;
+	u64 start_time, end_time;
+	char test_file[255];
+	int test_num = 0;
+	read_time[addr] = 0;
+
+	start_time = OSGetTick();
+	for (int i = 0; i < loops; i++)
+	{
+		test_num = rand() % samples + 1;
+		snprintf(test_file, 255, "sd:/wiiu/apps/sdtest/data/%s%d.x", file_name, test_num);
+		iFd = open(test_file, O_RDONLY);  
+		if (iFd >= 0)  
+		{  
+			read(iFd, fileBuffer, file_size);  
+			close(iFd);  
+		}
+		else
+		{
+			failed = 1;
+			break;
+		}
+	}
+	if (!failed)
+	{
+		end_time = OSGetTick();
+		read_time[addr] = (double)((end_time - start_time)/ SECS_TO_TICKS(1) * 100 / MAGIC_NUMBER) / 100;
+		update_screen(read_time, 1);
+	}
+	return failed;
+}
+
+int test2(unsigned char* fileBuffer, double read_time[], int addr, int file_size, int samples, int loops, char *file_name)
+{
+	int iFd;
+	int failed = 0;
+	u64 start_time, end_time;
+	char test_file[255];
+	int test_num = 0;
+	read_time[addr] = 0;
+
+	snprintf(test_file, 255, "sd:/wiiu/apps/sdtest/data/%s.x", file_name);
+	start_time = OSGetTick();
+	iFd = open(test_file, O_RDONLY);  
+	if (iFd >= 0)
+	{
+		for (int i = 0; i < loops; i++)
+		{
+			test_num = rand() % samples;
+			lseek(iFd, test_num * file_size, SEEK_SET);
+			read(iFd, fileBuffer, file_size);  
+		}
+	}
+	else
+	{
+		failed = 1;
+	}
+	close(iFd);  
+	if (!failed)
+	{
+		end_time = OSGetTick();
+		read_time[addr] = (double)((end_time - start_time)/ SECS_TO_TICKS(1) * 100 / MAGIC_NUMBER) / 100;
+		update_screen(read_time, 1);
+	}
+	return failed;
+}
+
+
 int Menu_Main(void)
 {
     //!*******************************************************************
@@ -41,6 +153,7 @@ int Menu_Main(void)
     log_print("Initialize memory management\n");
     //! We don't need bucket and MEM1 memory so no need to initialize
     memoryInitialize();
+    char msg[80];
 
     //!*******************************************************************
     //!                        Initialize FS                             *
@@ -71,13 +184,23 @@ int Menu_Main(void)
     OSScreenClearBufferEx(0, 0);
     OSScreenClearBufferEx(1, 0);
 
-    // print to TV
-    OSScreenPutFontEx(0, 0, 0, "Hello world on TV!!!");
-    OSScreenPutFontEx(0, 0, 1, "Press HOME-Button to exit.");
+	// setup filebuffer
+	int mem_ok = 0;
+    unsigned char *fileBuffer = MEM1_alloc(10000020, 0x40);
+	if (fileBuffer != NULL) mem_ok = 1;
 
-    // print to DRC
-    OSScreenPutFontEx(1, 0, 0, "Hello world on DRC!!!");
-    OSScreenPutFontEx(1, 0, 1, "Press HOME-Button to exit.");
+	PRINT_TEXT2(0, 0, "SD Test");
+	PRINT_TEXT2(0, 1, "Press HOME-Button to exit.");
+
+    if (mem_ok)
+	{
+		PRINT_TEXT2(0, 2, "Press A to start.");
+	}
+	else
+	{
+		PRINT_TEXT2(0, 2, "Memory allocation failed");
+	}
+		
 
     // Flush the cache
     DCFlushRange(screenBuffer, screen_buf0_size);
@@ -89,17 +212,86 @@ int Menu_Main(void)
 
     int vpadError = -1;
     VPADData vpad;
+ 
+	srand (time(NULL));
 
-    while(1)
+	int failed = 0;
+	double read_time[10] = {0};
+    while(mem_ok)
     {
         VPADRead(0, &vpad, 1, &vpadError);
+		u32 pressedBtns = vpad.btns_d | vpad.btns_h;
+		if(vpadError != 0 ) pressedBtns = 0;
+		
+        if(pressedBtns & VPAD_BUTTON_HOME)
+        {
+			mem_ok = 0;
+			break;
+		}
 
-        if(vpadError == 0 && ((vpad.btns_d | vpad.btns_h) & VPAD_BUTTON_HOME))
-            break;
+        if(pressedBtns & VPAD_BUTTON_A)
+        {
+			if (test1(fileBuffer, read_time, 0, 1000, 100, 1000, "A")) break;		// 100 x 1k files, 1000 reads
+			if (test1(fileBuffer, read_time, 1, 10000, 100, 1000, "B")) break;		// 100 x 10k files, 1000 reads
+			if (test1(fileBuffer, read_time, 2, 100000, 100, 1000, "C")) break;		// 100 x 100k files, 1000 reads
+			if (test1(fileBuffer, read_time, 3, 1000000, 100, 1000, "D")) break;	// 100 x 1M files, 1000 reads
 
+			if (test2(fileBuffer, read_time, 4, 1000, 100, 1000, "D1")) break;		// 100 x 1k blocks in 1M file, 1000 reads
+			if (test2(fileBuffer, read_time, 5, 10000, 100, 1000, "E")) break;		// 100 x 10k blocks in 10M file, 1000 reads
+			if (test2(fileBuffer, read_time, 6, 100000, 100, 1000, "F")) break;		// 100 x 100k blocks in 100M file, 1000 reads
+			if (test2(fileBuffer, read_time, 7, 1000000, 100, 1000, "G")) break;	// 100 x 1M blocks in 1G file, 1000 reads
+
+			if (test2(fileBuffer, read_time, 8, 1000, 1000, 10000, "E")) break;		// 1000 x 1k blocks in 10M file, 1000 reads
+			
+			break;
+		}
+		usleep(20000);
+    }
+	
+	if (mem_ok)
+	{
+		OSScreenClearBufferEx(0, 0);
+		OSScreenClearBufferEx(1, 0);
+		if (failed)
+		{
+			PRINT_TEXT2(0, 8, "Memory read failed.");
+		}
+		else
+		{
+				update_screen(read_time, 0);
+		}
+		PRINT_TEXT2(0, 14, "Home or X to Exit");
+		OSScreenFlipBuffersEx(0);
+		OSScreenFlipBuffersEx(1);
+	}
+
+	FILE *dataFile = fopen("sd:/wiiu/apps/sdtest/testdata.txt", "w");
+	if (!failed)
+	{
+		fprintf(dataFile, "1k byte = %.2f s, %.2f MBps\r\n", read_time[0], calc_read_rate(read_time[0], 1));
+		fprintf(dataFile, "10k byte = %.2f s, %.2f MBps\r\n", read_time[1], calc_read_rate(read_time[1], 10));
+		fprintf(dataFile, "100k byte = %.2f s, %.2f MBps\r\n", read_time[2], calc_read_rate(read_time[2], 100));
+		fprintf(dataFile, "1M byte = %.2f s, %.2f MBps\r\n", read_time[3], calc_read_rate(read_time[3], 1000));
+		fprintf(dataFile, "1k byte in 1M = %.2f s, %.2f MBps\r\n", read_time[4], calc_read_rate(read_time[4], 1));
+		fprintf(dataFile, "10k byte in 10M = %.2f s, %.2f MBps\r\n", read_time[5], calc_read_rate(read_time[5], 10));
+		fprintf(dataFile, "100k byte in 100M = %.2f s, %.2f MBps\r\n", read_time[6], calc_read_rate(read_time[6], 100));
+		fprintf(dataFile, "1M byte in 1G = %.2f s, %.2f MBps\r\n", read_time[7], calc_read_rate(read_time[7], 1000));
+		fprintf(dataFile, "1k byte in 10M = %.2f s, %.2f MBps\r\n", read_time[8], calc_read_rate(read_time[8], 10));
+	}
+	fclose(dataFile);
+	
+    while(mem_ok)
+    {
+        VPADRead(0, &vpad, 1, &vpadError);
+		u32 pressedBtns = vpad.btns_d | vpad.btns_h;
+		if(vpadError != 0 ) pressedBtns = 0;
+
+        if(pressedBtns & VPAD_BUTTON_HOME) break;
+        if(pressedBtns & VPAD_BUTTON_X) break;
 		usleep(50000);
     }
 
+	MEM1_free(fileBuffer);
 	MEM1_free(screenBuffer);
 	screenBuffer = NULL;
 
