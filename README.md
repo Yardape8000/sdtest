@@ -1,11 +1,6 @@
 # sdtest
 Wii U SD benchmark
 
-NOTE:
-There is a bug in the timer function that looses seconds.  Seems to be rolling over.
-RESULTS ARE USELESS at this time.
-1k, 10k, 100k may be OK.
-
 Before use:
 Run the createFiles.bat file in the sdtest/data folder.
  This will create the 1.2GB of test files. Run it from the SD card.
