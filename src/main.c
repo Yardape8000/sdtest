@@ -5,9 +5,10 @@
 #include <unistd.h>
 #include <fcntl.h> 
 #include <string.h>
-#include <time.h>
-#include <sys/time.h>
+//#include <time.h>
+//#include <sys/time.h>
 #include <malloc.h>
+//#include <inttypes.h>
 #include "dynamic_libs/os_functions.h"
 #include "dynamic_libs/fs_functions.h"
 #include "dynamic_libs/gx2_functions.h"
@@ -25,7 +26,27 @@
 
 #define TEST_FILE_PATH	"sd:/wiiu/apps/sdtest/data/" 
 #define PRINT_TEXT2(x, y, ...) { snprintf(msg, 80, __VA_ARGS__); OSScreenPutFontEx(0, x, y, msg); OSScreenPutFontEx(1, x, y, msg); }
-#define MAGIC_NUMBER 4294969930
+
+u64 fix_OSTicks(u64 ticks)
+{
+	ticks = ((ticks & 0x00000000FFFFFFFF) << 32) | ((ticks & 0xFFFFFFFF00000000) >> 32);
+	return ticks;
+}
+
+u32 pressed_buttons(void)
+{
+    int vpadError = -1;
+    VPADData vpad;
+	VPADRead(0, &vpad, 1, &vpadError);
+	return (vpadError == 0 ) ? (vpad.btns_d | vpad.btns_h) : 0;
+}
+
+double calc_read_time(u64 end_time, u64 start_time, int rollover)
+{
+	start_time = (start_time & 0xFFFFFFFF00000000) >> 32;
+	end_time = (end_time & 0xFFFFFFFF00000000) >> 32 | ((u64)rollover << 32);
+	return (double)((end_time - start_time) * 100 / SECS_TO_TICKS(1)) / 100;
+}
 
 double calc_read_rate(double read_time, int factor)
 {
@@ -54,6 +75,7 @@ void update_screen(double data[], int handle_buffer)
 	PRINT_TEXT2(0, 12, "1k byte in 10M = %.2f s, %.2f MBps", data[8], calc_read_rate(data[8], 10));
 	if (handle_buffer)
 	{
+		PRINT_TEXT2(0, 14, "Hold X to Exit");
 		OSScreenFlipBuffersEx(0);
 		OSScreenFlipBuffersEx(1);
 	}
@@ -63,12 +85,15 @@ int test1(unsigned char* fileBuffer, double read_time[], int addr, int file_size
 {
 	int iFd;
 	int failed = 0;
-	u64 start_time, end_time;
+	u64 start_time, end_time, last_time;
 	char test_file[255];
 	int test_num = 0;
 	read_time[addr] = 0;
-
+	int rollover = 0;
+	
 	start_time = OSGetTick();
+	end_time = start_time;
+	last_time = start_time;
 	for (int i = 0; i < loops; i++)
 	{
 		test_num = rand() % samples + 1;
@@ -84,11 +109,15 @@ int test1(unsigned char* fileBuffer, double read_time[], int addr, int file_size
 			failed = 1;
 			break;
 		}
+		end_time = OSGetTick();
+		if (end_time < last_time)
+			rollover ++;
+		last_time = end_time;
 	}
 	if (!failed)
 	{
-		end_time = OSGetTick();
-		read_time[addr] = (double)((end_time - start_time)/ SECS_TO_TICKS(1) * 100 / MAGIC_NUMBER) / 100;
+		//end_time = OSGetTick();
+		read_time[addr] = calc_read_time(end_time, start_time, rollover);
 		update_screen(read_time, 1);
 	}
 	return failed;
@@ -98,13 +127,15 @@ int test2(unsigned char* fileBuffer, double read_time[], int addr, int file_size
 {
 	int iFd;
 	int failed = 0;
-	u64 start_time, end_time;
+	u64 start_time, end_time, last_time;
 	char test_file[255];
 	int test_num = 0;
-	read_time[addr] = 0;
-
+	int rollover = 0;
+	
 	snprintf(test_file, 255, "sd:/wiiu/apps/sdtest/data/%s.x", file_name);
 	start_time = OSGetTick();
+	end_time = start_time;
+	last_time = start_time;
 	iFd = open(test_file, O_RDONLY);  
 	if (iFd >= 0)
 	{
@@ -113,6 +144,11 @@ int test2(unsigned char* fileBuffer, double read_time[], int addr, int file_size
 			test_num = rand() % samples;
 			lseek(iFd, test_num * file_size, SEEK_SET);
 			read(iFd, fileBuffer, file_size);  
+
+			end_time = OSGetTick();
+			if (end_time < last_time)
+				rollover ++;
+			last_time = end_time;
 		}
 	}
 	else
@@ -123,7 +159,9 @@ int test2(unsigned char* fileBuffer, double read_time[], int addr, int file_size
 	if (!failed)
 	{
 		end_time = OSGetTick();
-		read_time[addr] = (double)((end_time - start_time)/ SECS_TO_TICKS(1) * 100 / MAGIC_NUMBER) / 100;
+		if (end_time < last_time)
+			rollover ++;
+		read_time[addr] = calc_read_time(end_time, start_time, rollover);
 		update_screen(read_time, 1);
 	}
 	return failed;
@@ -210,20 +248,16 @@ int Menu_Main(void)
     OSScreenFlipBuffersEx(0);
     OSScreenFlipBuffersEx(1);
 
-    int vpadError = -1;
-    VPADData vpad;
- 
 	srand (time(NULL));
 
 	int failed = 0;
 	double read_time[10] = {0};
+	u32 pressedBtns;
+	
     while(mem_ok)
     {
-        VPADRead(0, &vpad, 1, &vpadError);
-		u32 pressedBtns = vpad.btns_d | vpad.btns_h;
-		if(vpadError != 0 ) pressedBtns = 0;
-		
-        if(pressedBtns & VPAD_BUTTON_HOME)
+        pressedBtns = pressed_buttons();
+		if(pressedBtns & VPAD_BUTTON_HOME)
         {
 			mem_ok = 0;
 			break;
@@ -232,16 +266,25 @@ int Menu_Main(void)
         if(pressedBtns & VPAD_BUTTON_A)
         {
 			if (test1(fileBuffer, read_time, 0, 1000, 100, 1000, "A")) break;		// 100 x 1k files, 1000 reads
+			if(pressed_buttons() & VPAD_BUTTON_X) break;
 			if (test1(fileBuffer, read_time, 1, 10000, 100, 1000, "B")) break;		// 100 x 10k files, 1000 reads
+			if(pressed_buttons() & VPAD_BUTTON_X) break;
 			if (test1(fileBuffer, read_time, 2, 100000, 100, 1000, "C")) break;		// 100 x 100k files, 1000 reads
+			if(pressed_buttons() & VPAD_BUTTON_X) break;
 			if (test1(fileBuffer, read_time, 3, 1000000, 100, 1000, "D")) break;	// 100 x 1M files, 1000 reads
+			if(pressed_buttons() & VPAD_BUTTON_X) break;
 
 			if (test2(fileBuffer, read_time, 4, 1000, 100, 1000, "D1")) break;		// 100 x 1k blocks in 1M file, 1000 reads
+			if(pressed_buttons() & VPAD_BUTTON_X) break;
 			if (test2(fileBuffer, read_time, 5, 10000, 100, 1000, "E")) break;		// 100 x 10k blocks in 10M file, 1000 reads
+			if(pressed_buttons() & VPAD_BUTTON_X) break;
 			if (test2(fileBuffer, read_time, 6, 100000, 100, 1000, "F")) break;		// 100 x 100k blocks in 100M file, 1000 reads
+			if(pressed_buttons() & VPAD_BUTTON_X) break;
 			if (test2(fileBuffer, read_time, 7, 1000000, 100, 1000, "G")) break;	// 100 x 1M blocks in 1G file, 1000 reads
+			if(pressed_buttons() & VPAD_BUTTON_X) break;
 
 			if (test2(fileBuffer, read_time, 8, 1000, 1000, 10000, "E")) break;		// 1000 x 1k blocks in 10M file, 1000 reads
+			if(pressed_buttons() & VPAD_BUTTON_X) break;
 			
 			break;
 		}
@@ -250,6 +293,12 @@ int Menu_Main(void)
 	
 	if (mem_ok)
 	{
+		DCFlushRange(screenBuffer, screen_buf0_size);
+		DCFlushRange((screenBuffer + screen_buf0_size), screen_buf1_size);
+		OSScreenClearBufferEx(0, 0);
+		OSScreenClearBufferEx(1, 0);
+		OSScreenFlipBuffersEx(0);
+		OSScreenFlipBuffersEx(1);
 		OSScreenClearBufferEx(0, 0);
 		OSScreenClearBufferEx(1, 0);
 		if (failed)
@@ -266,7 +315,7 @@ int Menu_Main(void)
 	}
 
 	FILE *dataFile = fopen("sd:/wiiu/apps/sdtest/testdata.txt", "w");
-	if (!failed)
+	if (!failed && dataFile != NULL)
 	{
 		fprintf(dataFile, "1k byte = %.2f s, %.2f MBps\r\n", read_time[0], calc_read_rate(read_time[0], 1));
 		fprintf(dataFile, "10k byte = %.2f s, %.2f MBps\r\n", read_time[1], calc_read_rate(read_time[1], 10));
@@ -282,12 +331,8 @@ int Menu_Main(void)
 	
     while(mem_ok)
     {
-        VPADRead(0, &vpad, 1, &vpadError);
-		u32 pressedBtns = vpad.btns_d | vpad.btns_h;
-		if(vpadError != 0 ) pressedBtns = 0;
 
-        if(pressedBtns & VPAD_BUTTON_HOME) break;
-        if(pressedBtns & VPAD_BUTTON_X) break;
+        if(pressed_buttons() & (VPAD_BUTTON_HOME | VPAD_BUTTON_X)) break;
 		usleep(50000);
     }
 
